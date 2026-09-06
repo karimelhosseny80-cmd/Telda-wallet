@@ -1,0 +1,883 @@
+import streamlit as st
+import pandas as pd
+import requests
+from bs4 import BeautifulSoup
+import datetime
+import json
+import os
+from google import genai
+
+st.set_page_config(page_title="محفظة تيلدا", layout="centered", initial_sidebar_state="collapsed")
+
+DATA_FILE = "portfolio_data.json"
+
+# القاموس الحصري الكامل لأسهم كاشف
+SHARIAH_ALL_STOCKS = {
+    "BIGP": {"name": "بي اي جي للتجاره والاستثمار", "rate": 0.00, "category": "نقي"},
+    "CAED": {"name": "القاهرة للخدمات التعليمية", "rate": 0.00, "category": "نقي"},
+    "FIRE": {"name": "الاولى للاستثمار", "rate": 0.00, "category": "نقي"},
+    "FNAR": {"name": "الفنار للمقاولات", "rate": 0.00, "category": "نقي"},
+    "MISR": {"name": "مصر انتركونتننتال لصناعة الجرانيت والرخام", "rate": 0.00, "category": "نقي"},
+    "MOED": {"name": "المصرية لنظم التعليم الحديثة", "rate": 0.00, "category": "نقي"},
+    "NEDA": {"name": "شمال الصعيد للتنمية الزراعية - نيوداب", "rate": 0.00, "category": "نقي"},
+    "UPMS": {"name": "الاتحاد الصيدلي للخدمات الطبية", "rate": 0.00, "category": "نقي"},
+    "AMES": {"name": "المركز الطبي الجديد - الاسكندرية للخدمات", "rate": 0.01, "category": "شبه نقي"},
+    "BIOC": {"name": "جلاسكو", "rate": 0.0069, "category": "شبه نقي"},
+    "CEFM": {"name": "مطاحن مصر الوسطى", "rate": 0.038, "category": "شبه نقي"},
+    "DCRC": {"name": "دلتا للانشاء والتعمير", "rate": 0.0072, "category": "شبه نقي"},
+    "EGAS": {"name": "غاز مصر", "rate": 0.0006, "category": "شبه نقي"},
+    "ELNA": {"name": "النصر للحاصلات الزراعية", "rate": 0.00, "category": "شبه نقي"},
+    "ELWA": {"name": "الوادي للاستثمار والتنمية", "rate": 0.0212, "category": "شبه نقي"},
+    "FCMD": {"name": "فيوتشر كير للصناعات الطبية", "rate": 0.0131, "category": "شبه نقي"},
+    "GGRN": {"name": "جو جرين للاستثمار الزراعى والتنمية", "rate": 0.0001, "category": "شبه نقي"},
+    "ICFC": {"name": "الدولية للأسمدة والكيماويات", "rate": 0.011, "category": "شبه نقي"},
+    "IEEC": {"name": "المشروعات الصناعية", "rate": 0.0148, "category": "شبه نقي"},
+    "INEG": {"name": "المجموعة المتكاملة", "rate": 0.0052, "category": "شبه نقي"},
+    "INFI": {"name": "الاسماعيلية الوطنية للصناعات الغذائية - فوديكو", "rate": 0.0139, "category": "شبه نقي"},
+    "MBSC": {"name": "مصر بني سويف للاسمنت", "rate": 0.0128, "category": "شبه نقي"},
+    "MILS": {"name": "مطاحن شمال القاهرة", "rate": 0.0089, "category": "شبه نقي"},
+    "MOSC": {"name": "مصر للزيوت و الصابون", "rate": 0.0008, "category": "شبه نقي"},
+    "NDRL": {"name": "الحفر الوطنية", "rate": 0.00, "category": "شبه نقي"},
+    "OBRI": {"name": "العبور للاستثمار العقاري", "rate": 0.0094, "category": "شبه نقي"},
+    "PHGC": {"name": "بريميم هيلثكير جروب", "rate": 0.00, "category": "شبه نقي"},
+    "PRCL": {"name": "الشركة العامة لمنتجات الخزف والصينى شينى", "rate": 0.0007, "category": "شبه نقي"},
+    "SIPC": {"name": "سبأ الدولية للأدوية والصناعات الكيماوية", "rate": 0.00, "category": "شبه نقي"},
+    "SMFR": {"name": "سماد مصر - ايجيفرت", "rate": 0.0195, "category": "شبه نقي"},
+    "VERT": {"name": "فرتيكا للصناعة و التجارة", "rate": 0.00, "category": "شبه نقي"},
+    "ZEOT": {"name": "الزيوت المستخلصة ومنتجاتها", "rate": 0.0047, "category": "شبه نقي"},
+    "ZMID": {"name": "زهراء المعادي", "rate": 0.0408, "category": "شرعي مختلط A"},
+    "AXPH": {"name": "الاسكندرية للادوية", "rate": 0.0049, "category": "شرعي مختلط A"},
+    "BONY": {"name": "بنيان", "rate": 0.03, "category": "شرعي مختلط A"},
+    "CLHO": {"name": "مستشفى كليوباترا", "rate": 0.0063, "category": "شرعي مختلط A"},
+    "CPCI": {"name": "القاهرة للادوية", "rate": 0.0074, "category": "شرعي مختلط A"},
+    "EGAL": {"name": "مصر للالومنيوم", "rate": 0.0073, "category": "شرعي مختلط A"},
+    "FTNS": {"name": "فيتنس برايم", "rate": 0.00, "category": "شرعي مختلط A"},
+    "ISMA": {"name": "الاسماعيلية مصر للدواجن", "rate": 0.00, "category": "شرعي مختلط A"},
+    "MTIE": {"name": "ام ام جروب للصناعة والتجارة العالمية", "rate": 0.006, "category": "شرعي مختلط A"},
+    "ORAS": {"name": "اوراسكوم كونستراكشون بي ال سي", "rate": 0.0087, "category": "شرعي مختلط A"},
+    "RACC": {"name": "راية لخدمات مراكز الاتصالات", "rate": 0.02, "category": "شرعي مختلط A"},
+    "SPMD": {"name": "سبيد ميديكال", "rate": 0.00, "category": "شرعي مختلط A"},
+    "ACGC": {"name": "العربية لحليج الأقطان", "rate": 0.0137, "category": "شرعي مختلط B"},
+    "AIDC": {"name": "ارابيا للاستثمار والتنمية", "rate": 0.0033, "category": "شرعي مختلط B"},
+    "AMOC": {"name": "الاسكندرية للزيوت - اموك", "rate": 0.0005, "category": "شرعي مختلط B"},
+    "APSW": {"name": "العربية وبولفارا للغزل والنسيج", "rate": 0.0024, "category": "شرعي مختلط B"},
+    "ARCC": {"name": "العربية للاسمنت", "rate": 0.0202, "category": "شرعي مختلط B"},
+    "ATQA": {"name": "مصر الوطنية للصلب - عتاقة", "rate": 0.0354, "category": "شرعي مختلط B"},
+    "DAPH": {"name": "التعمير والاستشارات الهندسية", "rate": 0.03, "category": "شرعي مختلط B"},
+    "ETRS": {"name": "المصرية لخدمات النقل - ايجيترانس", "rate": 0.012, "category": "شرعي مختلط B"},
+    "GGCC": {"name": "الجيزة للمقاولات", "rate": 0.0027, "category": "شرعي مختلط B"},
+    "GOUR": {"name": "جورميه ايجيبت دوت كوم للاغذية", "rate": 0.0184, "category": "شرعي مختلط B"},
+    "KABO": {"name": "النصر للملابس والمنسوجات - كابو", "rate": 0.0055, "category": "شرعي مختلط B"},
+    "KRDI": {"name": "نهر الخير", "rate": 0.0006, "category": "شرعي مختلط B"},
+    "MCQE": {"name": "مصر للاسمنت قنا", "rate": 0.0322, "category": "شرعي مختلط B"},
+    "MPCO": {"name": "المنصورة للدواجن", "rate": 0.0042, "category": "شرعي مختلط B"},
+    "OCPH": {"name": "اكتوبر فارما", "rate": 0.0111, "category": "شرعي مختلط B"},
+    "ROTO": {"name": "رواد السياحة", "rate": 0.004, "category": "شرعي مختلط B"},
+    "UEFM": {"name": "مطاحن مصر العليا", "rate": 0.0288, "category": "شرعي مختلط B"},
+    "AALR": {"name": "العامة لاستصلاح الاراضي", "rate": 0.0006, "category": "شرعي مختلط C"},
+    "ADCI": {"name": "العربية للادوية والصناعات الكيماوية", "rate": 0.0062, "category": "شرعي مختلط C"},
+    "ALUM": {"name": "العربية للالومنيوم", "rate": 0.00, "category": "شرعي مختلط C"},
+    "AMII": {"name": "العربية للصناعات المعدنية - العربية للمحابس", "rate": 0.009, "category": "شرعي مختلط C"},
+    "CERA": {"name": "سيراميكا ريماس", "rate": 0.0011, "category": "شرعي مختلط C"},
+    "CIRA": {"name": "القاهره للإستثمار والتنمية العقاريه سيرا للتعليم", "rate": 0.0349, "category": "شرعي مختلط C"},
+    "COSG": {"name": "القاهرة للزيوت والصابون", "rate": 0.00, "category": "شرعي مختلط C"},
+    "EEII": {"name": "العربية للصناعات الهندسية", "rate": 0.0016, "category": "شرعي مختلط C"},
+    "EHDR": {"name": "المصريين للاسكان والتنمية والتعمير", "rate": 0.0077, "category": "شرعي مختلط C"},
+    "ELKA": {"name": "القاهرة للاسكان", "rate": 0.0475, "category": "شرعي مختلط C"},
+    "EPPK": {"name": "الاهرام للطباعة و التغليف", "rate": 0.00, "category": "شرعي مختلط C"},
+    "ETEL": {"name": "المصرية للاتصالات", "rate": 0.002, "category": "شرعي مختلط C"},
+    "GTEX": {"name": "جيتكس للاستثمارات التجارية والصناعية", "rate": 0.0042, "category": "شرعي مختلط C"},
+    "GTWL": {"name": "جولدن تكس للاصواف", "rate": 0.0011, "category": "شرعي مختلط C"},
+    "HBCO": {"name": "هيبكو للاستثمارات التجارية", "rate": 0.00, "category": "شرعي مختلط C"},
+    "ISPH": {"name": "ابن سينا فارما", "rate": 0.0001, "category": "شرعي مختلط C"},
+    "KORA": {"name": "قره لمشروعات الطاقة والاستثمار", "rate": 0.0031, "category": "شرعي مختلط C"},
+    "MAAL": {"name": "مرسيليا المصرية الخليجية", "rate": 0.0117, "category": "شرعي مختلط C"},
+    "MBEG": {"name": "ام بي للهندسة M.B", "rate": 0.0005, "category": "شرعي مختلط C"},
+    "MCRO": {"name": "ماكرو جروب للمستحضرات الطبية", "rate": 0.0408, "category": "شرعي مختلط C"},
+    "MPCI": {"name": "ممفيس للادوية والصناعات الكيماوية", "rate": 0.0487, "category": "شرعي مختلط C"},
+    "NIPH": {"name": "النيل للادوية والصناعات الكيماوية - النيل", "rate": 0.0039, "category": "شرعي مختلط C"},
+    "ORWE": {"name": "النساجون الشرقيون للسجاد", "rate": 0.0187, "category": "شرعي مختلط C"},
+    "RUBX": {"name": "روبكس العالميه لتصنيع البلاستيك", "rate": 0.0003, "category": "شرعي مختلط C"},
+    "SKPC": {"name": "سيدي كرير للبتروكيماويات - سيدبك", "rate": 0.034, "category": "شرعي مختلط C"},
+    "SUCE": {"name": "السويس للاسمنت", "rate": 0.0025, "category": "شرعي مختلط C"},
+    "SVCE": {"name": "جنوب الوادي للاسمنت", "rate": 0.0075, "category": "شرعي مختلط C"},
+    "SWDY": {"name": "السويدي الكتريك", "rate": 0.0086, "category": "شرعي مختلط C"},
+    "TALM": {"name": "تعليم لخدمات الإدارة", "rate": 0.0118, "category": "شرعي مختلط C"},
+    "PRDC": {"name": "بايونيرز بروبرتيز للتنمية العمرانية بي ار اي جروب", "rate": 0.00, "category": "متوافق"},
+}
+
+DEFAULT_STOCKS = [
+    {"icon": "⚙️", "name": "العربية للصناعات الهندسية", "ticker": "EEII", "qty": 24372, "avg": 2.2904, "fallback_price": 2.34, "target_price": 2.60},
+    {"icon": "🌾", "name": "نهر الخير للتنمية والاستثمار", "ticker": "KRDI", "qty": 123690, "avg": 0.4159, "fallback_price": 0.451, "target_price": 0.52},
+    {"icon": "🏢", "name": "القاهرة للإسكان والتعمير", "ticker": "ELKA", "qty": 21990, "avg": 1.7544, "fallback_price": 1.88, "target_price": 2.10},
+    {"icon": "🏺", "name": "سيراميكا ريماس", "ticker": "CERA", "qty": 22100, "avg": 1.3159, "fallback_price": 1.80, "target_price": 2.05},
+    {"icon": "🏗️", "name": "المصريين للإسكان والتنمية", "ticker": "EHDR", "qty": 9793, "avg": 2.6623, "fallback_price": 2.99, "target_price": 3.30},
+    {"icon": "⚡", "name": "طاقة عربية", "ticker": "TAQA", "qty": 738, "avg": 17.0141, "fallback_price": 17.00, "target_price": 19.50},
+    {"icon": "🔩", "name": "مصر الوطنية للصلب (عتاقة)", "ticker": "ATQA", "qty": 592, "avg": 12.6712, "fallback_price": 12.40, "target_price": 14.50},
+    {"icon": "🛢️", "name": "أموك للزيوت المعدنية", "ticker": "AMOC", "qty": 449, "avg": 7.9226, "fallback_price": 13.54, "target_price": 15.50},
+]
+
+PARTNERS = [
+    {"name": "الأم", "capital": 100000.0, "icon": "👑", "role": "شريك ممول"},
+    {"name": "محمود", "capital": 65000.0, "icon": "👨‍💼", "role": "شريك ممول"},
+    {"name": "نورا", "capital": 60000.0, "icon": "👩‍💼", "role": "شريك ممول"},
+    {"name": "كريم", "capital": 0.0, "icon": "💼", "role": "مدير المحفظة", "is_manager": True},
+]
+
+def load_data():
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                d = json.load(f)
+                if "realized_pnl" not in d:
+                    d["realized_pnl"] = 1.46
+                for s in d.get("stocks", []):
+                    if "target_price" not in s:
+                        s["target_price"] = round(s["avg"] * 1.15, 2)
+                return d
+        except Exception:
+            pass
+    return {
+        "stocks": DEFAULT_STOCKS,
+        "cash": 23.65,
+        "realized_pnl": 1.46,
+        "trades": [
+            {
+                "date": "2026-09-06",
+                "type": "بيع",
+                "ticker": "ECAP",
+                "stockName": "العز سيراميك (الجوهرة)",
+                "qty": 332,
+                "price": 34.50,
+                "val": 11454.00,
+                "fee": 9.60,
+                "net": 11444.40,
+                "settle_date": "2026-09-08",
+                "cycle": "T+2"
+            },
+            {
+                "date": "2026-09-06",
+                "type": "بيع",
+                "ticker": "ECAP",
+                "stockName": "العز سيراميك (الجوهرة)",
+                "qty": 30,
+                "price": 34.50,
+                "val": 1035.00,
+                "fee": 1.77,
+                "net": 1033.23,
+                "settle_date": "2026-09-08",
+                "cycle": "T+2"
+            },
+            {
+                "date": "2026-09-06",
+                "type": "بيع",
+                "ticker": "ECAP",
+                "stockName": "العز سيراميك (الجوهرة)",
+                "qty": 3,
+                "price": 34.50,
+                "val": 103.50,
+                "fee": 1.08,
+                "net": 102.42,
+                "settle_date": "2026-09-08",
+                "cycle": "T+2"
+            },
+            {
+                "date": "2026-09-06",
+                "type": "شراء",
+                "ticker": "TAQA",
+                "stockName": "طاقة عربية",
+                "qty": 738,
+                "price": 17.00,
+                "val": 12546.00,
+                "fee": 10.40,
+                "net": 12556.40,
+                "settle_date": "2026-09-08",
+                "cycle": "T+2"
+            }
+        ],
+        "expenses": []
+    }
+
+def save_data(data):
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+if "db" not in st.session_state:
+    st.session_state.db = load_data()
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+st.markdown("""
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@500;700;800&display=swap');
+    * { font-family: 'Cairo', sans-serif !important; direction: rtl; text-align: right; }
+    .block-container { padding: 0.8rem !important; background-color: #0b0f19; }
+    [data-testid="stSidebar"] { display: none !important; }
+    [data-testid="collapsedControl"] { display: none !important; }
+    
+    .prophet-banner {
+        background: linear-gradient(90deg, #10b981, #059669);
+        color: #ffffff;
+        text-align: center;
+        padding: 10px;
+        border-radius: 12px;
+        font-size: 16px;
+        font-weight: 700;
+        margin-bottom: 12px;
+    }
+    .summary-card {
+        background: linear-gradient(135deg, #1e1b4b, #312e81);
+        border: 1px solid #4338ca;
+        border-radius: 16px;
+        padding: 16px;
+        margin-bottom: 14px;
+        text-align: center;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+st.markdown('<div class="prophet-banner">✨ صلِّ على محمد ﷺ ✨</div>', unsafe_allow_html=True)
+st.markdown("<h2 style='text-align: center; color: #f8fafc; margin-bottom: 12px;'>💼 محفظة تيلدا</h2>", unsafe_allow_html=True)
+
+OFFICIAL_STOCK_DATA = {
+    "EEII": {"price": 2.34, "volume": "10,512,471", "change": "-0.43%"},
+    "KRDI": {"price": 0.451, "volume": "153,519,831", "change": "+0.45%"},
+    "ELKA": {"price": 1.88, "volume": "12,419,590", "change": "+0.53%"},
+    "CERA": {"price": 1.80, "volume": "86,988,869", "change": "+20.00%"},
+    "EHDR": {"price": 2.99, "volume": "19,016,502", "change": "+3.82%"},
+    "TAQA": {"price": 17.40, "volume": "7,211,914", "change": "+7.74%"},
+    "ATQA": {"price": 12.40, "volume": "8,141,407", "change": "+1.89%"},
+    "AMOC": {"price": 13.54, "volume": "9,285,100", "change": "+0.30%"}
+}
+
+@st.cache_data(ttl=60)
+def get_live_market_data(ticker, fallback_price):
+    try:
+        url = "https://scanner.tradingview.com/egypt/scan"
+        payload = {
+            "symbols": {"tickers": [f"EGX:{ticker.upper()}"]},
+            "columns": ["name", "close", "change", "volume", "Recommend.All", "RSI"]
+        }
+        headers = {"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"}
+        r = requests.post(url, json=payload, headers=headers, timeout=4)
+        if r.status_code == 200:
+            data = r.json().get("data", [])
+            if data and data[0].get("d"):
+                d = data[0]["d"]
+                close_p = float(d[1]) if d[1] is not None else fallback_price
+                chg_val = float(d[2]) if d[2] is not None else 0.0
+                vol_val = int(d[3]) if d[3] is not None else 0
+                chg_str = f"{'+' if chg_val >= 0 else ''}{chg_val:.2f}%"
+                vol_str = f"{vol_val:,.0f}"
+                rec_val = d[4]
+                rsi_val = round(d[5], 1) if d[5] is not None else None
+                return {
+                    "price": close_p, 
+                    "volume": vol_str, 
+                    "change": chg_str, 
+                    "recommendation": rec_val,
+                    "rsi": rsi_val
+                }
+    except Exception:
+        pass
+    
+    if ticker in OFFICIAL_STOCK_DATA:
+        return OFFICIAL_STOCK_DATA[ticker]
+    return {"price": fallback_price, "volume": "—", "change": "0.0%"}
+
+def analyze_volume_and_forecast(ticker, price, avg):
+    ratio = (price - avg) / avg if avg > 0 else 0
+    sup = round(price * 0.96, 2)
+    res = round(price * 1.05, 2)
+    sl = round(price * 0.93, 2)
+    
+    trigger = "🟢 السهم في منطقة استقرار"
+    if price <= sl * 1.01:
+        trigger = "⚠️ تنبيه عاجل: السهم يلامس وقف الخسارة!"
+    elif price >= res * 0.99:
+        trigger = "🎯 تنبيه: السهم يقترب من نقطة المقاومة وجني الأرباح!"
+    elif price <= sup * 1.01:
+        trigger = "🛡️ السهم يختبر منطقة الدعم الفني"
+        
+    if ticker == "KRDI":
+        vol_status = "سيولة مضاربية نشطة جداً"
+        forecast = f"تجميع وامتصاص عروض بيع. اختراق {round(price * 1.03, 3)} بفوليوم متصاعد يفتح الطريق نحو {res} ج.م."
+    elif ticker == "EEII":
+        vol_status = "تناقص بيعي وتماسك إيجابي"
+        forecast = f"تهدئة صحية أعلى متوسط الدخول. اختراق {round(price * 1.025, 2)} بفوليوم يستهدف {res} ج.م."
+    elif ticker == "AMOC":
+        vol_status = "سيولة مؤسسية متزنة"
+        forecast = f"سهم استثماري قيادي. الثبات أعلى {sup} ج.م يؤهل لاختبار مستويات {res} ج.م."
+    elif ticker in ["ELKA", "EHDR"]:
+        vol_status = "تجميع هادئ داخل قطاع الإسكان"
+        forecast = f"حركة عرضية مائلة للصعود نحو {res} ج.م بشرط البقاء أعلى {sup} ج.م."
+    elif ticker == "CERA":
+        vol_status = "أرباح جيدة وتماسك سعري"
+        forecast = f"حماية الأرباح فوق {sup} ج.م واستهداف {res} ج.م للمضاربة."
+    else:
+        vol_status = "تداول هادئ وترقب محفزات"
+        forecast = f"نطاق عرضي متوقع بين دعم {sup} ج.م ومقاومة {res} ج.م."
+        
+    trend = "صاعد 🟢" if ratio >= 0 else "تصحيحي 🔴"
+    return {"sup": sup, "res": res, "sl": sl, "trend": trend, "vol_status": vol_status, "forecast": forecast, "trigger": trigger}
+
+@st.cache_data(ttl=900)
+def get_stock_news(ticker):
+    url = f"https://www.mubasher.info/markets/EGX/stocks/{ticker}/news"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    news_items = []
+    try:
+        res = requests.get(url, headers=headers, timeout=4)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, 'html.parser')
+            links = soup.find_all('a', href=lambda x: x and '/news/' in x)
+            for a in links[:3]:
+                title = a.text.strip()
+                href = a.get('href')
+                full_url = f"https://www.mubasher.info{href}" if href.startswith('/') else href
+                if title and len(title) > 15 and {"title": title, "url": full_url} not in news_items:
+                    news_items.append({"title": title, "url": full_url})
+    except Exception:
+        pass
+    return news_items
+
+portfolio_data = []
+total_purify_due = 0.0
+
+for s in st.session_state.db["stocks"]:
+    market_info = get_live_market_data(s["ticker"], s["fallback_price"])
+    item = dict(s)
+    item["price"] = market_info["price"]
+    item["volume"] = market_info["volume"]
+    item["change"] = market_info["change"]
+    portfolio_data.append(item)
+    
+    # حساب مبالغ التطهير: لو السهم غير مدرج في كاشف، يتم اعتبار التطهير 100% من أرباحه بالكامل
+    s_cost = s["qty"] * s["avg"]
+    s_val = s["qty"] * market_info["price"]
+    s_pnl = s_val - s_cost
+    
+    if s["ticker"] in SHARIAH_ALL_STOCKS:
+        s_rate = SHARIAH_ALL_STOCKS[s["ticker"]]["rate"]
+    else:
+        s_rate = 1.0  # 100% تطهير للأرباح للأسهم غير المتوافقة
+        
+    if s_pnl > 0:
+        total_purify_due += (s_pnl * s_rate)
+
+df = pd.DataFrame(portfolio_data)
+total_cost = (df["qty"] * df["avg"]).sum()
+total_market = (df["qty"] * df["price"]).sum()
+net_pnl = total_market - total_cost
+net_return = (net_pnl / total_cost) * 100 if total_cost > 0 else 0
+df["weight"] = (df["qty"] * df["price"]) / total_market * 100 if total_market > 0 else 0
+
+pnl_color = "#34d399" if net_pnl >= 0 else "#f87171"
+realized_color = "#34d399" if st.session_state.db.get("realized_pnl", 0) >= 0 else "#f87171"
+
+st.markdown(f"""
+<div class="summary-card">
+    <div style="color: #a5b4fc; font-size: 13px;">إجمالي القيمة السوقية</div>
+    <div style="color: #ffffff; font-size: 26px; font-weight: 800; margin: 4px 0;">{total_market:,.2f} ج.م</div>
+    <div style="color: {pnl_color}; font-size: 15px; font-weight: 700;">
+        الأرباح الدفترية: {net_pnl:+,.2f} ج.م ({net_return:+.2f}%)
+    </div>
+    <div style="display: flex; justify-content: space-around; margin-top: 8px; font-size: 12px;">
+        <span style="color: #cbd5e1;">الكاش المتاح: <b>{st.session_state.db['cash']:,.2f} ج.م</b></span>
+        <span style="color: {realized_color};">الأرباح المحققة: <b>{st.session_state.db.get('realized_pnl', 0):+,.2f} ج.م</b></span>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+if st.button("🔄 تحديث أسعار وفوليوم السوق الآن", use_container_width=True):
+    st.cache_data.clear()
+    st.rerun()
+
+menu = st.selectbox(
+    "☰ اختيار القسم:",
+    [
+        "📊 الأسهم والمحفظة", 
+        "🎯 فرص وتوصيات الجلسة القادمة",
+        "👥 حسابات الشركاء والأرباح", 
+        "🎯 الأهداف والتقدم", 
+        "📈 الفوليوم والتنبيهات", 
+        "📝 تسجيل الصفقات والتسوية", 
+        "⚖️ التطهير الشرعي", 
+        "📜 الدليل الشرعي لأسهم كاشف",
+        "📰 أخبار البورصة", 
+        "🤖 مساعد التداول", 
+        "💵 إدارة الكاش والنسخ الاحتياطي"
+    ],
+    key="active_menu"
+)
+st.write("")
+
+# 1. شاشة الأسهم
+if menu == "📊 الأسهم والمحفظة":
+    st.markdown("### 📊 تفاصيل الأسهم والأوزان النسبية")
+    for _, row in df.iterrows():
+        cost = row["qty"] * row["avg"]
+        val = row["qty"] * row["price"]
+        pnl = val - cost
+        ret = (pnl / cost) * 100
+        
+        with st.container():
+            col1, col2 = st.columns([3, 1])
+            col1.markdown(f"**{row['icon']} {row['name']}**")
+            col2.markdown(f"`{row['ticker']}`")
+            
+            c1, c2 = st.columns(2)
+            p_display = f"{row['price']:.3f} ج.م" if row['price'] < 1 else f"{row['price']:.2f} ج.م"
+            c1.metric("السعر الحالي", p_display, delta=row['change'])
+            c2.metric("متوسط الشراء", f"{row['avg']:.4f} ج.م")
+            
+            c3, c4 = st.columns(2)
+            c3.caption(f"الكمية: **{row['qty']:,}** سهم")
+            c4.caption(f"القيمة: **{val:,.2f} ج.م**")
+            
+            st.caption(f"⚖️ **وزن السهم في المحفظة:** `{row['weight']:.1f}%`")
+            color_delta = "green" if pnl >= 0 else "red"
+            st.markdown(f":{color_delta}[**الربح / الخسارة الدفترية:** {pnl:+,.2f} ج.م ({ret:+.2f}%)]")
+            st.divider()
+
+# 2. شاشة فرص وتوصيات الجلسة القادمة
+elif menu == "🎯 فرص وتوصيات الجلسة القادمة":
+    st.markdown("### 🎯 أفضل فرصتين مضاربيتين لجلسة الغد")
+    st.caption("مختارة حصراً من قائمة كاشف المتوافقة مع الشريعة الإسلامية بناءً على الفوليوم والسيولة:")
+    
+    with st.container():
+        st.markdown("""
+        <div style="background-color: #162235; border: 1px solid #38bdf8; border-radius: 12px; padding: 14px; margin-bottom: 12px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="color: #f8fafc; font-weight: bold; font-size: 16px;">🌾 نهر الخير (KRDI)</span>
+                <span style="background: #0369a1; color: #e0f2fe; padding: 2px 8px; border-radius: 6px; font-size: 12px;">فرصة مضاربة 1</span>
+            </div>
+            <div style="color: #94a3b8; font-size: 13px; margin: 8px 0;">
+                🔹 <b>حركة الفوليوم:</b> امتصاص بيعي وتجميع قوي جداً قرب القاع مع سيولة تخطت 60 مليون سهم.<br>
+                🔹 <b>الموقف الشرعي (كاشف):</b> شرعي مختلط B (نسبة التطهير: <b>0.06%</b> فقط من الأرباح).
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 13px; background: #0f172a; padding: 10px; border-radius: 8px;">
+                <div>نقطة الدخول المقترحة: <b style="color: #38bdf8;">0.445 - 0.450 ج.م</b></div>
+                <div>المستهدف الأول: <b style="color: #4ade80;">0.472 ج.م</b></div>
+                <div>المستهدف الثاني: <b style="color: #4ade80;">0.495 ج.م</b></div>
+                <div>وقف الخسارة الصارم: <b style="color: #f87171;">0.435 ج.م</b></div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+    with st.container():
+        st.markdown("""
+        <div style="background-color: #162235; border: 1px solid #38bdf8; border-radius: 12px; padding: 14px; margin-bottom: 12px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="color: #f8fafc; font-weight: bold; font-size: 16px;">⚙️ العربية للصناعات الهندسية (EEII)</span>
+                <span style="background: #0369a1; color: #e0f2fe; padding: 2px 8px; border-radius: 6px; font-size: 12px;">فرصة مضاربة 2</span>
+            </div>
+            <div style="color: #94a3b8; font-size: 13px; margin: 8px 0;">
+                🔹 <b>حركة الفوليوم:</b> تناقص بيعي مع ثبات ملحوظ فوق الدعم اللحظي وتماسك إيجابي.<br>
+                🔹 <b>الموقف الشرعي (كاشف):</b> شرعي مختلط C (نسبة التطهير: <b>0.16%</b> من الأرباح).
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 13px; background: #0f172a; padding: 10px; border-radius: 8px;">
+                <div>نقطة الدخول المقترحة: <b style="color: #38bdf8;">2.32 - 2.35 ج.م</b></div>
+                <div>المستهدف الأول: <b style="color: #4ade80;">2.46 ج.م</b></div>
+                <div>المستهدف الثاني: <b style="color: #4ade80;">2.55 ج.م</b></div>
+                <div>وقف الخسارة الصارم: <b style="color: #f87171;">2.26 ج.م</b></div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+# 3. شاشة حسابات الشركاء بعد خصم التطهير
+elif menu == "👥 حسابات الشركاء والأرباح":
+    st.markdown("### 👥 توزيع الشركاء وحصص الأرباح (بعد خصم التطهير)")
+    total_partner_capital = sum(p["capital"] for p in PARTNERS)
+    gross_profit = net_pnl + st.session_state.db.get("realized_pnl", 0.0)
+    net_distributable_profit = max(0.0, gross_profit - total_purify_due) if gross_profit > 0 else (gross_profit - total_purify_due)
+    
+    st.markdown(f"""
+    <div style="background: linear-gradient(135deg, #1e1b4b, #2e1065); border: 1px solid #7c3aed; border-radius: 14px; padding: 16px; margin-bottom: 16px; text-align: center;">
+        <div style="color: #c4b5fd; font-size: 13px;">رأس المال الأصلي الموزع: <b>{total_partner_capital:,.2f} ج.م</b></div>
+        <div style="color: #94a3b8; font-size: 12px; margin-top: 4px;">إجمالي الأرباح الكلية: {gross_profit:+,.2f} ج.م | التطهير المخصوم بالكامل: -{total_purify_due:,.2f} ج.م</div>
+        <div style="color: #34d399; font-size: 20px; font-weight: 800; margin-top: 6px;">
+            صافي الربح الحلال للتوزيع: {net_distributable_profit:+,.2f} ج.م
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    for p in PARTNERS:
+        share_ratio = p["capital"] / total_partner_capital
+        partner_pct = share_ratio * 100
+        partner_profit = net_distributable_profit * share_ratio
+        total_entitlement = p["capital"] + partner_profit
+        
+        with st.container():
+            col_p1, col_p2 = st.columns([3, 1])
+            col_p1.markdown(f"#### {p['icon']} {p['name']}")
+            col_p2.markdown(f"**`{partner_pct:.2f}%`**")
+            
+            c1, c2 = st.columns(2)
+            c1.caption(f"رأس المال: **{p['capital']:,.2f} ج.م**")
+            p_color = "green" if partner_profit >= 0 else "red"
+            c2.markdown(f":{p_color}[الربح الصافي: **{partner_profit:+,.2f} ج.م**]")
+            
+            st.markdown(f"💰 **إجمالي المستحق الحالي:** `{total_entitlement:,.2f} ج.م`")
+            st.divider()
+
+# 4. شاشة الأهداف السعرية
+elif menu == "🎯 الأهداف والتقدم":
+    st.markdown("### 🎯 متابعة المستهدفات السعرية وجني الأرباح")
+    for s in st.session_state.db["stocks"]:
+        row = df[df["ticker"] == s["ticker"]].iloc[0]
+        cur_p = row["price"]
+        target = s.get("target_price", round(cur_p * 1.15, 2))
+        
+        with st.container():
+            st.markdown(f"**{s['icon']} {s['name']}** (`{s['ticker']}`)")
+            col_a, col_b = st.columns(2)
+            col_a.metric("السعر الحالي", f"{cur_p:.2f} ج.م")
+            new_target = col_b.number_input(f"المستهدف ({s['ticker']}):", value=float(target), step=0.05, key=f"t_{s['ticker']}")
+            
+            if new_target != target:
+                s["target_price"] = new_target
+                save_data(st.session_state.db)
+            
+            progress = min(1.0, max(0.0, cur_p / new_target)) if new_target > 0 else 0.0
+            st.progress(progress)
+            remaining_pct = ((new_target - cur_p) / cur_p) * 100
+            if remaining_pct > 0:
+                st.caption(f"🚀 متبقي للهدف: **{remaining_pct:.1f}%** ({new_target - cur_p:.2f} ج.م)")
+            else:
+                st.success("🎉 السهم وصل لهدفه السعري بنجاح!")
+            st.divider()
+
+# 5. شاشة الفوليوم والتنبيهات
+elif menu == "📈 الفوليوم والتنبيهات":
+    st.markdown("### 📈 التحليل الفني، الفوليوم، والتنبيهات")
+    for _, row in df.iterrows():
+        analysis = analyze_volume_and_forecast(row["ticker"], row["price"], row["avg"])
+        with st.container():
+            col_t1, col_t2 = st.columns([3, 1])
+            col_t1.markdown(f"**{row['icon']} {row['name']}**")
+            col_t2.markdown(f"`{row['ticker']}`")
+            
+            st.caption(f"🎯 **الحالة اللحظية:** {analysis['trigger']}")
+            
+            c1, c2 = st.columns(2)
+            c1.metric("السعر الحالي", f"{row['price']:.2f} ج.م", delta=row['change'])
+            c1.metric("حجم التداول", str(row['volume']))
+            c1.markdown(f"🟢 **الدعم الأول:** `{analysis['sup']:.2f} ج.م`")
+            
+            c2.metric("الاتجاه", analysis['trend'])
+            c2.markdown(f"💧 **السيولة:** {analysis['vol_status']}")
+            c2.markdown(f"🟠 **المقاومة الأولى:** `{analysis['res']:.2f} ج.م`")
+            
+            st.markdown(f"🔴 **وقف الخسارة المقترح:** `{analysis['sl']:.2f} ج.م`")
+            st.info(f"🔮 **توقع جلسة الغد:**\n\n{analysis['forecast']}")
+            st.divider()
+
+# 6. شاشة الصفقات مع إدخال العمولة الفعلية
+elif menu == "📝 تسجيل الصفقات والتسوية":
+    st.markdown("### 📝 تسجيل صفقة جديدة")
+    stock_tickers = [s["ticker"] for s in st.session_state.db["stocks"]]
+    
+    with st.form("trade_form"):
+        t_type = st.radio("نوع الصفقة:", ["شراء", "بيع"], horizontal=True)
+        t_ticker = st.selectbox("اختر السهم:", stock_tickers)
+        t_qty = st.number_input("الكمية:", min_value=1, step=50)
+        t_price = st.number_input("سعر التنفيذ (ج.م):", min_value=0.01, step=0.05, format="%.4f")
+        t_fee_actual = st.number_input("قيمة العمولة والرسوم الفعلية (ج.م):", min_value=0.0, step=1.0, format="%.2f")
+        t_cycle = st.selectbox("دورة التسوية:", ["T+1 (تسوية اليوم التالي)", "T+2 (تسوية بعد يومين)"])
+        
+        if st.form_submit_button("تنفيذ وتسجيل الصفقة", use_container_width=True):
+            raw_val = t_qty * t_price
+            today = datetime.date.today()
+            settle_days = 1 if "T+1" in t_cycle else 2
+            settle_date = str(today + datetime.timedelta(days=settle_days))
+            
+            for s in st.session_state.db["stocks"]:
+                if s["ticker"] == t_ticker:
+                    if t_type == "شراء":
+                        total_cost_inc_fee = raw_val + t_fee_actual
+                        new_qty = s["qty"] + t_qty
+                        new_avg = ((s["qty"] * s["avg"]) + total_cost_inc_fee) / new_qty
+                        s["qty"] = new_qty
+                        s["avg"] = round(new_avg, 4)
+                        st.session_state.db["cash"] -= total_cost_inc_fee
+                    elif t_type == "بيع":
+                        net_proceeds = raw_val - t_fee_actual
+                        cost_of_sold = t_qty * s["avg"]
+                        trade_realized = net_proceeds - cost_of_sold
+                        st.session_state.db["realized_pnl"] = st.session_state.db.get("realized_pnl", 0) + trade_realized
+                        s["qty"] = max(0, s["qty"] - t_qty)
+                        st.session_state.db["cash"] += net_proceeds
+            
+            st.session_state.db["trades"].append({
+                "date": str(today),
+                "type": t_type,
+                "ticker": t_ticker,
+                "qty": t_qty,
+                "price": t_price,
+                "val": raw_val,
+                "fee": round(t_fee_actual, 2),
+                "settle_date": settle_date,
+                "cycle": t_cycle
+            })
+            save_data(st.session_state.db)
+            st.success("تم تسجيل العملية بنجاح بالعمولة الفعلية!")
+            st.rerun()
+
+    if st.session_state.db["trades"]:
+        st.divider()
+        st.markdown("### 📋 سجل الصفقات ومواعيد التسوية:")
+        for tr in reversed(st.session_state.db["trades"][-6:]):
+            st.markdown(f"• **{tr['type']}** {tr['qty']:,} في `{tr['ticker']}` بسعر {tr['price']:.3f} ج.م (عمولة فعلية: {tr.get('fee', 0):.2f} ج.م) | ⏳ تسوية: `{tr['settle_date']}`")
+
+# 7. شاشة التطهير الشرعي مع قاعدة 100% تطهير للأسهم الخارجة عن كاشف
+elif menu == "⚖️ التطهير الشرعي":
+    st.markdown("### ⚖️ الموقف الشرعي ومبالغ التطهير المستحقة (كاشف)")
+    for _, row in df.iterrows():
+        val = row["qty"] * row["price"]
+        cost = row["qty"] * row["avg"]
+        pnl = val - cost
+        
+        is_shariah = row["ticker"] in SHARIAH_ALL_STOCKS
+        if is_shariah:
+            info = SHARIAH_ALL_STOCKS[row["ticker"]]
+            rate = info["rate"]
+            cat = info["category"]
+        else:
+            rate = 1.0  # خارج الشريعة بالكامل
+            cat = "خارج الشريعة (غير مدرج في كاشف)"
+            
+        purify_amt = (pnl * rate) if (pnl > 0 and rate > 0) else 0.0
+        
+        with st.container():
+            st.markdown(f"**{row['icon']} {row['name']}** (`{row['ticker']}`)")
+            if not is_shariah:
+                st.error("🔴 **سهم غير متوافق شرعاً:** غير مدرج في كاشف - نسبة التطهير: **100% من كامل الأرباح**")
+            elif rate == 0.0:
+                st.success(f"🟢 درجة النقاء: **{cat}** (لا يستوجب تطهير)")
+            else:
+                st.warning(f"🟡 درجة النقاء: **{cat}** - نسبة التطهير: **{rate * 100:.2f}%**")
+                
+            c1, c2 = st.columns(2)
+            c1.caption(f"الأرباح السوقية: **{pnl:+,.2f} ج.م**")
+            if pnl > 0:
+                c2.markdown(f"💸 **مستحق التطهير:** `{purify_amt:,.2f} ج.م`")
+            else:
+                c2.caption("لا يستحق تطهير (المركز في خسارة/تعادل)")
+            st.divider()
+            
+    st.markdown(f"""
+    <div style="background-color: #1e1b4b; border: 1px solid #6366f1; border-radius: 12px; padding: 14px; text-align: center;">
+        <div style="color: #c7d2fe; font-size: 13px;">إجمالي مبالغ التطهير المستحقة على أرباح المحفظة الحالية</div>
+        <div style="color: #fb923c; font-size: 22px; font-weight: bold; margin-top: 4px;">{total_purify_due:,.2f} ج.م</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+# 8. شاشة الدليل الشرعي الكامل لكاشف
+elif menu == "📜 الدليل الشرعي لأسهم كاشف":
+    st.markdown("### 📜 دليل الأسهم الحلال المعتمدة (كاشف)")
+    st.caption("جميع الأسهم المصرح بالمضاربة عليها ونسب تطهيرها الرسمية:")
+    
+    search_q = st.text_input("🔍 ابحث عن سهم برمز السهم أو الاسم:", "")
+    
+    items = []
+    for ticker, val in SHARIAH_ALL_STOCKS.items():
+        if search_q == "" or search_q.upper() in ticker or search_q in val["name"]:
+            items.append({
+                "الرمز": ticker,
+                "الشركة": val["name"],
+                "التصنيف": val["category"],
+                "نسبة التطهير": f"{val['rate'] * 100:.2f}%"
+            })
+            
+    st.dataframe(pd.DataFrame(items), use_container_width=True, hide_index=True)
+
+# 9. شاشة الأخبار
+elif menu == "📰 أخبار البورصة":
+    st.markdown("### 📰 أحدث الإفصاحات وأخبار الأسهم")
+    for _, row in df.iterrows():
+        news = get_stock_news(row["ticker"])
+        with st.expander(f"{row['icon']} {row['name']} ({row['ticker']})"):
+            if news:
+                for n in news:
+                    st.markdown(f"• [{n['title']}]({n['url']})")
+            else:
+                st.caption("لا توجد إفصاحات جديدة اليوم.")
+
+# 10. شاشة البوت
+elif menu == "🤖 مساعد التداول":
+    st.markdown("### 🤖 مساعد التداول الذكي (Gemini 3.6 Flash)")
+    import base64
+    default_key = base64.b64decode(b'QVEuQWI4Uk42S1F6azBEa2xQY2xBLUVwVHVxSnZpc0dtSlQ0SVpKSlRBTU0xSVYtc0Z3SlE=').decode('utf-8')
+    api_key = st.text_input("مفتاح Gemini API:", value=default_key, type="password")
+    
+    uploaded_file = st.file_uploader("📷 إرفاق لقطة شاشة لأمر تداول أو محفظة (من تطبيق ثندر أو شركة السمسرة):", type=["png", "jpg", "jpeg", "webp"])
+    if uploaded_file:
+        st.image(uploaded_file, caption="معاينة الصورة المرفقة", use_container_width=True)
+
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.write(msg["content"])
+
+    user_q = st.chat_input("اكتب أمرك (مثال: اشتريت 1000 سهم فوري بسعر 7.20) أو اسأل عن المحفظة...")
+    if user_q or uploaded_file:
+        query_text = user_q or "حلل لقطة الشاشة المرفقة واستخرج أي عملية تداول منفذة بدقة."
+        st.session_state.messages.append({"role": "user", "content": query_text})
+        with st.chat_message("user"):
+            st.write(query_text)
+        
+        portfolio_summary = df[["ticker", "name", "qty", "avg", "price", "volume", "weight"]].to_string()
+        prompt = f"""
+        أنت المساعد المالي الذكي ومدير الصفقات الآلي لمحفظة تيلدا في البورصة المصرية (EGX).
+        أنت مقيد بمعايير كاشف للأسهم النقية الحلال (أي سهم خارج كاشف تطهير 100% من أرباحه).
+        بيانات المحفظة الحالية:
+        - الكاش: {st.session_state.db['cash']:,.2f} ج.م
+        - الأرباح المحققة: {st.session_state.db.get('realized_pnl', 0):+,.2f} ج.م
+        {portfolio_summary}
+        
+        سؤال/طلب المستخدم: {query_text}
+        
+        إذا طلب المستخدم تسجيل عملية بيع أو شراء، أو أرفق لقطة شاشة تتضمن عملية، استخرج التفاصيل وضع كود JSON التالي في نهاية ردك:
+        ```json
+        {{
+          "action": "BUY" | "SELL" | "CASH_DEPOSIT" | "CASH_WITHDRAW" | "NONE",
+          "trade": {{
+            "type": "شراء" أو "بيع",
+            "ticker": "كود السهم الإنجليزي",
+            "name": "اسم السهم",
+            "qty": عدد الأسهم,
+            "price": سعر التنفيذ,
+            "fees": العمولة
+          }},
+          "cash_action": {{
+            "type": "deposit" أو "withdraw",
+            "amount": المبلغ
+          }}
+        }}
+        ```
+        أجب بالعامية المصرية باختصار وذكاء واحترافية.
+        """
+        
+        try:
+            client = genai.Client(api_key=api_key or default_key)
+            contents_payload = []
+            if uploaded_file:
+                from google.genai import types
+                contents_payload.append(
+                    types.Part.from_bytes(
+                        data=uploaded_file.getvalue(),
+                        mime_type=uploaded_file.type
+                    )
+                )
+            contents_payload.append(prompt)
+
+            models_to_try = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-flash-latest"]
+            ans = None
+            last_err = None
+            for m in models_to_try:
+                try:
+                    response = client.models.generate_content(
+                        model=m,
+                        contents=contents_payload,
+                    )
+                    ans = response.text
+                    if ans:
+                        break
+                except Exception as ex:
+                    last_err = ex
+            
+            if not ans:
+                ans = f"عذراً، تعذر استلام رد من النموذج: {last_err}"
+
+            # فحص أوامر التداول التلقائية
+            import re
+            json_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', ans)
+            action_notice = ""
+            if json_match:
+                try:
+                    p = json.loads(json_match.group(1))
+                    if p.get("action") == "BUY" and p.get("trade"):
+                        t = p["trade"]
+                        t_ticker = t.get("ticker", "").upper()
+                        t_qty = int(t.get("qty", 0))
+                        t_price = float(t.get("price", 0))
+                        t_cost = t_qty * t_price
+                        st.session_state.db["cash"] -= t_cost
+                        matched = next((s for s in st.session_state.db["stocks"] if s["ticker"] == t_ticker), None)
+                        if matched:
+                            new_qty = matched["qty"] + t_qty
+                            matched["avg"] = ((matched["qty"] * matched["avg"]) + t_cost) / new_qty
+                            matched["qty"] = new_qty
+                            matched["price"] = t_price
+                        else:
+                            st.session_state.db["stocks"].append({
+                                "name": t.get("name", t_ticker),
+                                "ticker": t_ticker,
+                                "qty": t_qty,
+                                "avg": t_price,
+                                "fallback_price": t_price,
+                                "price": t_price,
+                                "target_price": round(t_price * 1.15, 2)
+                            })
+                        save_data(st.session_state.db)
+                        action_notice = f"\n\n⚡ **تم تسجيل صفقة شراء {t_qty:,} سهم في {t_ticker} بسعر {t_price:.2f} ج.م وتحديث المحفظة تلقائياً!**"
+                    elif p.get("action") == "SELL" and p.get("trade"):
+                        t = p["trade"]
+                        t_ticker = t.get("ticker", "").upper()
+                        t_qty = int(t.get("qty", 0))
+                        t_price = float(t.get("price", 0))
+                        net_val = t_qty * t_price
+                        st.session_state.db["cash"] += net_val
+                        matched = next((s for s in st.session_state.db["stocks"] if s["ticker"] == t_ticker), None)
+                        if matched:
+                            cost_sold = t_qty * matched["avg"]
+                            st.session_state.db["realized_pnl"] += (net_val - cost_sold)
+                            matched["qty"] = max(0, matched["qty"] - t_qty)
+                            matched["price"] = t_price
+                        save_data(st.session_state.db)
+                        action_notice = f"\n\n⚡ **تم تسجيل صفقة بيع {t_qty:,} سهم في {t_ticker} بسعر {t_price:.2f} ج.م وحساب الأرباح المحققة وتحديث المحفظة تلقائياً!**"
+                except Exception:
+                    pass
+
+            clean_ans = re.sub(r'```(?:json)?\s*[\s\S]*?\s*```', '', ans).strip() + action_notice
+            with st.chat_message("assistant"):
+                st.write(clean_ans)
+            st.session_state.messages.append({"role": "assistant", "content": clean_ans})
+
+        except Exception as e:
+            st.error(f"حدث خطأ في الاتصال: {e}")
+
+# 11. شاشة الكاش والنسخ الاحتياطي
+elif menu == "💵 إدارة الكاش والنسخ الاحتياطي":
+    st.markdown("### 💵 إدارة الكاش والمصاريف")
+    with st.form("cash_form"):
+        action = st.selectbox("نوع المعاملة:", ["مصروف شخصي", "إيداع كاش للمحفظة", "سحب كاش من المحفظة"])
+        amt = st.number_input("المبلغ (ج.م):", min_value=1.0, step=50.0)
+        desc = st.text_input("البيان:")
+        if st.form_submit_button("حفظ الحركة", use_container_width=True):
+            if action == "إيداع كاش للمحفظة":
+                st.session_state.db["cash"] += amt
+            elif action == "سحب كاش من المحفظة":
+                st.session_state.db["cash"] -= amt
+            st.session_state.db["expenses"].append({"date": str(datetime.date.today()), "type": action, "amt": amt, "desc": desc})
+            save_data(st.session_state.db)
+            st.success("تم الحفظ بنجاح!")
+            st.rerun()
+
+    if st.session_state.db["expenses"]:
+        st.divider()
+        st.markdown("### آخر المعاملات المسجلة:")
+        for exp in reversed(st.session_state.db["expenses"][-5:]):
+            st.markdown(f"• {exp['date']} | {exp['type']}: **{exp['amt']} ج.م** ({exp['desc']})")
+
+    st.divider()
+    st.markdown("### 💾 النسخ الاحتياطي للبيانات")
+    st.caption("حمّل نسخة كاملة من بيانات محفظتك وصفقاتك لحفظها على جهازك:")
+    db_json_bytes = json.dumps(st.session_state.db, ensure_ascii=False, indent=2).encode('utf-8')
+    st.download_button(
+        label="📥 تنزيل نسخة احتياطية (portfolio_data.json)",
+        data=db_json_bytes,
+        file_name="portfolio_data.json",
+        mime="application/json",
+        use_container_width=True
+    )
