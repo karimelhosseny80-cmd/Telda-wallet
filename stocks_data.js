@@ -95,14 +95,14 @@ const SHARIAH_ALL_STOCKS = {
 };
 
 const DEFAULT_STOCKS = [
-    { name: "العربية للصناعات الهندسية", ticker: "EEII", qty: 24372, avg: 2.2904, price: 2.34, target_price: 2.60, volume: "10,512,471", change: "-0.43%", entry_date: "2026-08-18" },
-    { name: "نهر الخير للتنمية", ticker: "KRDI", qty: 123690, avg: 0.4159, price: 0.451, target_price: 0.52, volume: "153,519,831", change: "+0.45%", entry_date: "2026-08-15" },
-    { name: "القاهرة للإسكان والتعمير", ticker: "ELKA", qty: 21990, avg: 1.7544, price: 1.88, target_price: 2.10, volume: "12,419,590", change: "+0.53%", entry_date: "2026-08-22" },
-    { name: "سيراميكا ريماس", ticker: "CERA", qty: 22100, avg: 1.3159, price: 1.80, target_price: 2.05, volume: "86,988,869", change: "+20.00%", entry_date: "2026-08-10" },
-    { name: "المصريين للإسكان والتنمية", ticker: "EHDR", qty: 9793, avg: 2.6623, price: 2.99, target_price: 3.30, volume: "19,016,502", change: "+3.82%", entry_date: "2026-08-25" },
-    { name: "طاقة عربية", ticker: "TAQA", qty: 738, avg: 17.0141, price: 17.40, target_price: 19.50, volume: "7,211,914", change: "+7.74%", entry_date: "2026-09-06" },
-    { name: "مصر الوطنية للصلب (عتاقة)", ticker: "ATQA", qty: 592, avg: 12.6712, price: 12.40, target_price: 14.50, volume: "8,141,407", change: "+1.89%", entry_date: "2026-09-01" },
-    { name: "أموك للزيوت المعدنية", ticker: "AMOC", qty: 449, avg: 7.9226, price: 13.54, target_price: 15.50, volume: "9,285,100", change: "+0.30%", entry_date: "2026-08-28" }
+    { name: "العربية للصناعات الهندسية", ticker: "EEII", qty: 24372, avg: 2.2904, price: 2.42, target_price: 2.60, volume: "7,172,864", change: "+3.42%", entry_date: "2026-08-18" },
+    { name: "نهر الخير للتنمية", ticker: "KRDI", qty: 123690, avg: 0.4159, price: 0.448, target_price: 0.52, volume: "88,018,200", change: "-0.67%", entry_date: "2026-08-15" },
+    { name: "القاهرة للإسكان والتعمير", ticker: "ELKA", qty: 21990, avg: 1.7544, price: 1.83, target_price: 2.10, volume: "12,352,960", change: "-2.66%", entry_date: "2026-08-22" },
+    { name: "سيراميكا ريماس", ticker: "CERA", qty: 22100, avg: 1.3159, price: 1.77, target_price: 2.05, volume: "175,545,705", change: "-1.67%", entry_date: "2026-08-10" },
+    { name: "المصريين للإسكان والتنمية", ticker: "EHDR", qty: 9793, avg: 2.6623, price: 2.99, target_price: 3.30, volume: "7,619,393", change: "0.00%", entry_date: "2026-08-25" },
+    { name: "طاقة عربية", ticker: "TAQA", qty: 738, avg: 17.0141, price: 16.81, target_price: 19.50, volume: "15,486,082", change: "-3.39%", entry_date: "2026-09-06" },
+    { name: "مصر الوطنية للصلب (عتاقة)", ticker: "ATQA", qty: 592, avg: 12.6712, price: 12.20, target_price: 14.50, volume: "5,579,493", change: "-1.61%", entry_date: "2026-09-01" },
+    { name: "أموك للزيوت المعدنية", ticker: "AMOC", qty: 449, avg: 7.9226, price: 13.50, target_price: 15.50, volume: "9,704,658", change: "-0.30%", entry_date: "2026-08-28" }
 ];
 
 const DEFAULT_CASH = 23.65;

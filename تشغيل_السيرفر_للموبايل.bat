@@ -17,5 +17,5 @@ echo    ليتحول التطبيق فوراً إلى تطبيق هاتف مست
 echo ========================================================
 echo (اترك هذه النافذة مفتوحة طوال فترة استخدامك للتطبيق)
 echo.
-.\.venv\Scripts\python.exe -m http.server 8000 --bind 0.0.0.0
+.\.venv\Scripts\python.exe server.py
 pause

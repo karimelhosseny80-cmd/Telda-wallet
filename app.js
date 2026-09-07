@@ -5,7 +5,7 @@
 const STORAGE_KEY = 'telda_portfolio_storage_v7';
 const THEME_KEY = 'telda_theme_preference';
 const GEMINI_KEY_STORAGE = 'telda_gemini_api_key';
-const DEFAULT_GEMINI_KEY = (typeof atob !== 'undefined') ? atob('QVEuQWI4Uk42S1F6azBEa2xQY2xBLUVwVHVxSnZpc0dtSlQ0SVpKSlRBTU0xSVYtc0Z3SlE=') : '';
+const DEFAULT_GEMINI_KEY = '';
 
 let state = {
     stocks: JSON.parse(JSON.stringify(DEFAULT_STOCKS)),
@@ -191,11 +191,11 @@ function initState() {
 
     saveState();
 
-    // تهيئة وربط مفتاح المساعد الذكي تلقائياً وبشكل دائم
+    // تهيئة مفتاح المساعد الذكي
     let savedKey = localStorage.getItem(GEMINI_KEY_STORAGE) || "";
-    if (!savedKey || savedKey.length < 20 || savedKey.includes("LyMA6n")) {
-        savedKey = DEFAULT_GEMINI_KEY;
-        localStorage.setItem(GEMINI_KEY_STORAGE, savedKey);
+    if (savedKey.startsWith("AQ.") || savedKey.includes("LyMA6n")) {
+        localStorage.removeItem(GEMINI_KEY_STORAGE);
+        savedKey = "";
     }
     const keyInput = document.getElementById('geminiApiKey');
     if (keyInput) keyInput.value = savedKey;
@@ -240,6 +240,82 @@ let autoRefreshTimer = null;
 let autoRefreshEnabled = true;
 let lastMarketUpdateTime = null;
 
+/**
+ * دالة مركزية وموثوقة لجلب بيانات مسح البورصة المصرية وأسعار الأسهم
+ * ترسل الطلب بهيدر text/plain لتفادي قيود الـ CORS Preflight تماماً في كافة المتصفحات
+ * مع دعم البروكسي المحلي /api/scan للسيرفر عند الحاجة وبدائل احتياطية
+ */
+async function fetchTradingViewScannerData(payload, timeoutMs = 8000) {
+    const jsonString = typeof payload === 'string' ? payload : JSON.stringify(payload);
+
+    // 1. المحاولة المباشرة بهيدر text/plain لتفادي CORS Preflight تماماً
+    try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        const res = await fetch('https://scanner.tradingview.com/egypt/scan', {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body: jsonString,
+            signal: controller.signal
+        });
+        clearTimeout(timer);
+        if (res.ok) {
+            const data = await res.json();
+            if (data && (Array.isArray(data.data) || data.totalCount !== undefined)) {
+                return data;
+            }
+        }
+    } catch (e) {
+        console.warn("Direct TV scanner fetch failed or timed out:", e.message);
+    }
+
+    // 2. إذا كنا نعمل على سيرفر محلي (مثل server.py)، استخدام البروكسي الداخلي الموثوق
+    if (typeof window !== 'undefined' && window.location && window.location.protocol && window.location.protocol.startsWith('http')) {
+        try {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 6000);
+            const res = await fetch('/api/scan', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: jsonString,
+                signal: controller.signal
+            });
+            clearTimeout(timer);
+            if (res.ok) {
+                const data = await res.json();
+                if (data && (Array.isArray(data.data) || data.totalCount !== undefined)) {
+                    return data;
+                }
+            }
+        } catch (e) {
+            // تجاهل والانتقال للبديل
+        }
+    }
+
+    // 3. محاولة أخيرة عبر بروكسي بديل
+    try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 6000);
+        const res = await fetch('https://api.allorigins.win/raw?url=' + encodeURIComponent('https://scanner.tradingview.com/egypt/scan'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body: jsonString,
+            signal: controller.signal
+        });
+        clearTimeout(timer);
+        if (res.ok) {
+            const data = await res.json();
+            if (data && (Array.isArray(data.data) || data.totalCount !== undefined)) {
+                return data;
+            }
+        }
+    } catch (e) {
+        // تجاهل
+    }
+
+    return null;
+}
+
 async function refreshMarketPrices(isAuto = false) {
     if (isRefreshingPrices) return;
     isRefreshingPrices = true;
@@ -248,7 +324,7 @@ async function refreshMarketPrices(isAuto = false) {
     if (refreshBtn) refreshBtn.classList.add('loading-spin');
 
     const statusText = document.getElementById('marketStatusText');
-    if (statusText) statusText.textContent = "جاري الاتصال بالبورصة...";
+    if (statusText) statusText.textContent = "جاري تحديث الأسعار...";
 
     try {
         const tickers = state.stocks.map(s => `EGX:${s.ticker.toUpperCase()}`);
@@ -260,75 +336,62 @@ async function refreshMarketPrices(isAuto = false) {
             ]
         };
 
-        let res = null;
-        try {
-            res = await fetch('https://scanner.tradingview.com/egypt/scan', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-        } catch (netErr) {
-            res = await fetch('https://api.allorigins.win/raw?url=' + encodeURIComponent('https://scanner.tradingview.com/egypt/scan'), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            }).catch(() => null);
-        }
-
+        const data = await fetchTradingViewScannerData(payload);
         let updatedCount = 0;
-        if (res && res.ok) {
-            const data = await res.json();
-            if (data && Array.isArray(data.data)) {
-                data.data.forEach(row => {
-                    const tvSymbol = row.s || "";
-                    const cleanTicker = tvSymbol.replace('EGX:', '').toUpperCase();
-                    const stock = state.stocks.find(s => s.ticker.toUpperCase() === cleanTicker);
-                    if (stock && row.d) {
-                        const [name, close, change, valueTraded, volume, recAll, rsi, high, low, open] = row.d;
 
-                        if (typeof close === 'number' && close > 0) stock.price = close;
-                        if (typeof change === 'number') {
-                            stock.change = (change >= 0 ? '+' : '') + change.toFixed(2) + '%';
-                            stock.change_num = change;
-                        }
-                        if (typeof volume === 'number') {
-                            stock.volume = Number(volume).toLocaleString();
-                            stock.volume_raw = volume;
-                        }
-                        if (typeof valueTraded === 'number') stock.value_traded = valueTraded;
-                        if (typeof high === 'number') stock.day_high = high;
-                        if (typeof low === 'number') stock.day_low = low;
-                        if (typeof open === 'number') stock.day_open = open;
-                        if (typeof rsi === 'number') stock.rsi = Number(rsi.toFixed(1));
+        if (data && Array.isArray(data.data) && data.data.length > 0) {
+            data.data.forEach(row => {
+                const tvSymbol = row.s || "";
+                const cleanTicker = tvSymbol.replace('EGX:', '').toUpperCase();
+                const stock = state.stocks.find(s => s.ticker.toUpperCase() === cleanTicker);
+                if (stock && row.d) {
+                    const [name, close, change, valueTraded, volume, recAll, rsi, high, low, open] = row.d;
 
-                        if (typeof recAll === 'number') {
-                            stock.rec_score = recAll;
-                            if (recAll >= 0.5) stock.recommendation = { text: "شراء قوي", type: "strong-buy", icon: '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>', color: "emerald" };
-                            else if (recAll >= 0.1) stock.recommendation = { text: "شراء", type: "buy", icon: '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><polyline points="5 12 12 5 19 12"/></svg>', color: "emerald" };
-                            else if (recAll > -0.1) stock.recommendation = { text: "حياد", type: "neutral", icon: '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" x2="19" y1="12" y2="12"/></svg>', color: "amber" };
-                            else if (recAll > -0.5) stock.recommendation = { text: "بيع", type: "sell", icon: '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><polyline points="19 12 12 19 5 12"/></svg>', color: "rose" };
-                            else stock.recommendation = { text: "بيع قوي", type: "strong-sell", icon: '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>', color: "rose" };
-                        }
-                        stock.last_updated = new Date().toLocaleTimeString('ar-EG');
-                        updatedCount++;
+                    if (typeof close === 'number' && close > 0) stock.price = close;
+                    if (typeof change === 'number') {
+                        stock.change = (change >= 0 ? '+' : '') + change.toFixed(2) + '%';
+                        stock.change_num = change;
                     }
-                });
-            }
+                    if (typeof volume === 'number') {
+                        stock.volume = Number(volume).toLocaleString();
+                        stock.volume_raw = volume;
+                    }
+                    if (typeof valueTraded === 'number') stock.value_traded = valueTraded;
+                    if (typeof high === 'number') stock.day_high = high;
+                    if (typeof low === 'number') stock.day_low = low;
+                    if (typeof open === 'number') stock.day_open = open;
+                    if (typeof rsi === 'number') stock.rsi = Number(rsi.toFixed(1));
+
+                    if (typeof recAll === 'number') {
+                        stock.rec_score = recAll;
+                        if (recAll >= 0.5) stock.recommendation = { text: "شراء قوي", type: "strong-buy", icon: '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>', color: "emerald" };
+                        else if (recAll >= 0.1) stock.recommendation = { text: "شراء", type: "buy", icon: '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><polyline points="5 12 12 5 19 12"/></svg>', color: "emerald" };
+                        else if (recAll > -0.1) stock.recommendation = { text: "حياد", type: "neutral", icon: '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" x2="19" y1="12" y2="12"/></svg>', color: "amber" };
+                        else if (recAll > -0.5) stock.recommendation = { text: "بيع", type: "sell", icon: '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><polyline points="19 12 12 19 5 12"/></svg>', color: "rose" };
+                        else stock.recommendation = { text: "بيع قوي", type: "strong-sell", icon: '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>', color: "rose" };
+                    }
+                    stock.last_updated = new Date().toLocaleTimeString('ar-EG');
+                    updatedCount++;
+                }
+            });
+            lastMarketUpdateTime = new Date();
+            updateMarketStatusUI(true, updatedCount);
+        } else {
+            // في حال تعذر الاتصال اللحظي، الحفاظ على آخر أسعار مسجلة
+            updateMarketStatusUI(false);
         }
 
-        lastMarketUpdateTime = new Date();
-        updateMarketStatusUI();
-
-        // تحديث كامل الجداول والداش بورد والتوصيات تلقائياً وبشكل حي
+        // حفظ الحالة وإعادة رندر الجداول ومؤشرات الأداء
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
         renderAll();
         updateDynamicRecommendations();
 
-        if (!isAuto) {
-            showToast(`تم تحديث أسعار ${updatedCount} أسهم وفوليوم التداول وتوصيات كاشف لحظياً`);
+        if (!isAuto && updatedCount > 0) {
+            showToast(`تم تحديث أسعار ${updatedCount} أسهم وفوليوم التداول لحظياً`);
         }
     } catch (err) {
         console.error("خطأ في جلب بيانات البورصة المصرية:", err);
+        updateMarketStatusUI(false);
         if (!isAuto) {
             showToast("تعذر جلب التحديث اللحظي للبورصة، تم الإبقاء على آخر أسعار مسجلة.");
         }
@@ -338,15 +401,27 @@ async function refreshMarketPrices(isAuto = false) {
     }
 }
 
-function updateMarketStatusUI() {
+function updateMarketStatusUI(isSuccess = true, count = 0) {
     const statusText = document.getElementById('marketStatusText');
     const statusTime = document.getElementById('marketStatusTime');
     const dot = document.getElementById('livePulseDot');
 
-    if (dot) dot.classList.remove('offline');
-    if (statusText) statusText.textContent = "البورصة: لحظي ومباشر";
-    if (statusTime && lastMarketUpdateTime) {
-        statusTime.textContent = `(آخر تحديث: ${lastMarketUpdateTime.toLocaleTimeString('ar-EG')})`;
+    if (isSuccess && lastMarketUpdateTime) {
+        if (dot) {
+            dot.classList.remove('offline');
+            dot.style.background = 'var(--emerald)';
+        }
+        if (statusText) statusText.textContent = "البورصة: لحظي ومباشر 🟢";
+        if (statusTime) {
+            const countInfo = count > 0 ? ` (${count} أسهم)` : '';
+            statusTime.textContent = `آخر تحديث: ${lastMarketUpdateTime.toLocaleTimeString('ar-EG')}${countInfo}`;
+        }
+    } else {
+        if (dot) dot.classList.add('offline');
+        if (statusText) statusText.textContent = "البورصة: آخر أسعار مسجلة";
+        if (statusTime && lastMarketUpdateTime) {
+            statusTime.textContent = `آخر تحديث: ${lastMarketUpdateTime.toLocaleTimeString('ar-EG')}`;
+        }
     }
 }
 
@@ -377,6 +452,20 @@ function toggleAutoRefresh() {
     }
 }
 
+// إعادة التحديث اللحظي فور رجوع المستخدم للمتصفح أو عودة الإنترنت
+if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && autoRefreshEnabled) {
+            refreshMarketPrices(true);
+        }
+    });
+}
+if (typeof window !== 'undefined') {
+    window.addEventListener('online', () => {
+        refreshMarketPrices(false);
+    });
+}
+
 // مسح البورصة المصرية اللحظي لاستخراج أنشط الأسهم الشرعية
 async function fetchLiveMarketScreener() {
     const container = document.getElementById('liveMarketScreenerContainer');
@@ -394,14 +483,8 @@ async function fetchLiveMarketScreener() {
             range: [0, 40]
         };
 
-        const res = await fetch('https://scanner.tradingview.com/egypt/scan', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
+        const data = await fetchTradingViewScannerData(payload);
+        if (!data || !Array.isArray(data.data)) throw new Error("تعذر جلب بيانات المسح");
 
         if (data && Array.isArray(data.data)) {
             // تصفية الأسهم المتوافقة مع كاشف
@@ -605,25 +688,9 @@ async function updateDynamicRecommendations() {
             range: [0, 80]
         };
 
-        let res = null;
-        try {
-            res = await fetch('https://scanner.tradingview.com/egypt/scan', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-        } catch (e) {
-            res = await fetch('https://api.allorigins.win/raw?url=' + encodeURIComponent('https://scanner.tradingview.com/egypt/scan'), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            }).catch(() => null);
-        }
-
+        const data = await fetchTradingViewScannerData(payload);
         let recStocks = [];
-        if (res && res.ok) {
-            const data = await res.json();
-            if (data && Array.isArray(data.data)) {
+        if (data && Array.isArray(data.data)) {
                 data.data.forEach(item => {
                     const rawTicker = (item.s || "").replace('EGX:', '').toUpperCase();
                     const d = item.d;
@@ -684,9 +751,8 @@ async function updateDynamicRecommendations() {
                     });
                 });
             }
-        }
 
-        if (recStocks.length < 2) {
+            if (recStocks.length < 2) {
             recStocks = getFallbackKashefRecommendations();
         } else {
             recStocks.sort((a, b) => b.score - a.score);
@@ -1658,6 +1724,12 @@ function fmtPrice(val) {
 function fmtSign(val, decimals = 2) {
     const s = fmtNum(val, decimals);
     return val > 0 ? `+${s}` : s;
+}
+
+function fmtPct(val, decimals = 2) {
+    if (val === undefined || val === null || isNaN(val)) return "0.00%";
+    const sign = val > 0 ? "+" : "";
+    return `${sign}${Number(val).toFixed(decimals)}%`;
 }
 
 // إشعار Toast سريع
@@ -3640,7 +3712,7 @@ async function testGeminiApiKey() {
     const btn = document.getElementById('testGeminiBtn');
 
     let key = (input ? input.value.trim() : "") || localStorage.getItem(GEMINI_KEY_STORAGE) || DEFAULT_GEMINI_KEY;
-    key = key.trim().replace(/^[\"\'\`]|["\'\`]$/g, '').trim();
+    key = key.trim().replace(/^["'`]|["'`]$/g, '').trim();
 
     if (!key) {
         showToast("يرجى لصق مفتاح Gemini API أولاً لفحصه");
@@ -3648,45 +3720,81 @@ async function testGeminiApiKey() {
         return;
     }
 
+    if (!key.startsWith("AIza")) {
+        if (statusText) {
+            statusText.innerHTML = `<span style="color: var(--warning);">💡 تنبيه: مفتاح Google AI Studio يجب أن يبدأ بـ <b>AIzaSy...</b> (احصل عليه مجاناً بضغطة زر من <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:var(--primary);text-decoration:underline;">Google AI Studio</a>). المساعد المحلي للمحفظة يعمل بكامل طاقته لتسجيل الصفقات والكاش بدون أي مفتاح!</span>`;
+        }
+        showToast("المفتاح يجب أن يبدأ بـ AIzaSy");
+        return;
+    }
+
     if (btn) btn.disabled = true;
     if (statusText) statusText.innerHTML = `<span style="color: var(--primary);">جاري اختبار الاتصال بسيرفرات Google Gemini...</span>`;
 
     try {
-        const testUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${encodeURIComponent(key)}`;
-        const headers = { 'Content-Type': 'application/json', 'x-goog-api-key': key };
-        if (key.startsWith('ya29.')) {
-            headers['Authorization'] = `Bearer ${key}`;
-        }
-        const res = await fetch(testUrl, {
-            method: 'POST',
-            headers: headers,
-            body: JSON.stringify({
-                contents: [{ parts: [{ text: "ping" }] }]
-            })
-        });
+        const modelsToCheck = [
+            'gemini-2.5-flash',
+            'gemini-2.0-flash',
+            'gemini-1.5-flash',
+            'gemini-1.5-pro'
+        ];
 
-        if (res.ok) {
+        let success = false;
+        let lastErr = "";
+        let workingModel = "";
+
+        for (const model of modelsToCheck) {
+            try {
+                const testUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
+                const headers = { 'Content-Type': 'application/json', 'x-goog-api-key': key };
+                if (key.startsWith('ya29.')) {
+                    headers['Authorization'] = `Bearer ${key}`;
+                }
+                const res = await fetch(testUrl, {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify({
+                        contents: [{ parts: [{ text: "ping" }] }]
+                    })
+                });
+
+                if (res.ok) {
+                    success = true;
+                    workingModel = model;
+                    break;
+                } else {
+                    const errData = await res.json().catch(() => ({}));
+                    lastErr = errData.error?.message || `HTTP ${res.status}`;
+                    if (lastErr.includes("API_KEY_INVALID") || lastErr.includes("invalid authentication")) {
+                        break;
+                    }
+                }
+            } catch (netErr) {
+                lastErr = netErr.message || "خطأ في الشبكة";
+            }
+        }
+
+        if (success) {
             localStorage.setItem(GEMINI_KEY_STORAGE, key);
+            localStorage.setItem('telda_working_gemini_model', `models/${workingModel}`);
             showToast("تم التحقق: مفتاح Gemini API صالح وشغال 100%!");
             if (statusText) {
-                statusText.innerHTML = `<b style="color: var(--success); display: inline-flex; align-items: center; gap: 4px;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg> المفتاح صالح ومربوط بالذكاء الاصطناعي الكامل بنجاح!</b>`;
+                statusText.innerHTML = `<b style="color: var(--success); display: inline-flex; align-items: center; gap: 4px;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg> المفتاح صالح ومربوط بـ (${workingModel}) بنجاح!</b>`;
             }
             const pill = document.getElementById('aiStatusHeaderPill');
             if (pill) {
                 pill.style.borderColor = 'rgba(16, 185, 129, 0.4)';
                 const txt = document.getElementById('aiStatusHeaderText');
-                if (txt) txt.textContent = "جيمناي متصل ومفعل بالكامل";
+                if (txt) txt.textContent = `جيمناي (${workingModel}) متصل ومفعل 🟢`;
             }
         } else {
-            const errData = await res.json().catch(() => ({}));
-            let errMsg = errData.error?.message || `HTTP ${res.status}`;
             let tip = "";
-            if (errMsg.includes("invalid authentication credentials") || errMsg.includes("OAuth 2")) {
-                tip = ` (تنبيه: جوجل تتطلب مفتاح API Key من Google AI Studio يبدأ بـ AIzaSy، وليس OAuth أو Client ID. يمكنك نسخه مجاناً من <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:var(--primary);text-decoration:underline;">Google AI Studio</a> أو إرساله للمطور).`;
+            if (lastErr.includes("invalid authentication credentials") || lastErr.includes("OAuth 2") || key.startsWith("AQ.")) {
+                tip = `<br><span style="font-size:11px; color:var(--amber);">💡 تنبيه: مفتاح Google AI Studio المجاني يبدأ بـ <b>AIzaSy...</b> (احصل عليه مجاناً بضغطة زر من <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:var(--primary);text-decoration:underline;">Google AI Studio</a>). في هذه الأثناء، المساعد المحلي لمحفظتك يعمل بكامل طاقته لتسجيل وإدارة الصفقات بدون إنترنت!</span>`;
             }
-            showToast(`فشل المفتاح: ${errMsg}`);
+            showToast(`فحص المفتاح: ${lastErr}`);
             if (statusText) {
-                statusText.innerHTML = `<span style="color: var(--danger);">فشل المفتاح (${errMsg}).${tip}</span>`;
+                statusText.innerHTML = `<span style="color: var(--danger);">فشل فحص المفتاح: ${lastErr}</span>${tip}`;
             }
         }
     } catch (err) {
@@ -4202,12 +4310,12 @@ async function sendAiMessage() {
     renderChatMessages();
 
     // فحص صلاحية مفتاح Gemini API
-    const apiKey = rawKey.trim().replace(/^[\"\'\`]|["\'\`]$/g, '').trim();
-    const isValidGeminiKey = (apiKey.startsWith("AIza") || apiKey.startsWith("AQ.") || apiKey.startsWith("ya29.")) && apiKey.length > 15;
+    const apiKey = rawKey.trim().replace(/^["'`]|["'`]$/g, '').trim();
+    const isValidGeminiKey = apiKey.startsWith("AIza") && apiKey.length > 25;
 
     // إذا كانت الرسالة تتضمن أمر شراء/بيع مباشر، أو مفتاح Gemini غير متصل:
     const directTrade = parseTradeCommand(userText);
-    if (!attachedImage && directTrade) {
+    if (!attachedImage && (directTrade || !isValidGeminiKey)) {
         setTimeout(() => {
             messages = messages.filter(m => m.id !== tempId);
             const localRes = executeSmartLocalAssistant(userText, attachedImage);
@@ -4217,21 +4325,7 @@ async function sendAiMessage() {
                 actionResult: localRes.executedAction
             });
             renderChatMessages();
-        }, 200);
-        return;
-    }
-
-    if (!isValidGeminiKey) {
-        setTimeout(() => {
-            messages = messages.filter(m => m.id !== tempId);
-            const localRes = executeSmartLocalAssistant(userText, attachedImage);
-            messages.push({
-                role: "assistant",
-                content: localRes.replyText,
-                actionResult: localRes.executedAction
-            });
-            renderChatMessages();
-        }, 300);
+        }, 150);
         return;
     }
 
@@ -4292,13 +4386,15 @@ ${portfolioSummary}
     }
     contentParts.push({ text: systemPrompt });
 
-    // استخدام موديلات Google Gemini الرسمية والمستقرة
+    // استخدام موديلات Google Gemini الرسمية والمستقرة مع تفضيل الموديل الذي نجح في الاختبار
+    const savedWorkingModel = localStorage.getItem('telda_working_gemini_model');
     const modelsToTry = [
-        'models/gemini-3.6-flash',
-        'models/gemini-flash-latest',
+        savedWorkingModel,
         'models/gemini-2.5-flash',
-        'models/gemini-2.0-flash'
-    ];
+        'models/gemini-2.0-flash',
+        'models/gemini-1.5-flash',
+        'models/gemini-1.5-pro'
+    ].filter(Boolean);
 
     let replyText = null;
 
@@ -4336,15 +4432,11 @@ ${portfolioSummary}
     // إزالة رسالة الانتظار
     messages = messages.filter(m => m.id !== tempId);
 
-    // إذا فشل الاتصال الخارجي بـ Gemini، إبلاغ المستخدم بوضوح أو التبديل للمعالج الذكي
+    // إذا فشل الاتصال الخارجي بـ Gemini، التبديل للمعالج الذكي بسلاسة
     if (!replyText) {
         let failureNotice = "";
-        if (lastApiError) {
-            failureNotice = `⚠️ **تنبيه مفتاح Gemini:** (${lastApiError})
-يرجى التأكد من صلاحية المفتاح من Google AI Studio، أو يمكنك إرساله للمطور لوضعه في الكود مباشرة.
-
----
-`;
+        if (attachedImage) {
+            failureNotice = `💡 **ملاحظة لتحليل الصور:** تعذر الاتصال بـ Gemini (${lastApiError || 'تأكد من المفتاح'}). يمكنك كتابة تفاصيل الصفقة نصياً وسينفذها المساعد فوراً.\n\n---\n`;
         }
         const localRes = executeSmartLocalAssistant(userText, attachedImage);
         messages.push({ 
