@@ -2,15 +2,16 @@
 // تطبيق محفظة تيلدا - محرك الداش بورد العصري والواجهة التفاعلية
 // ===================================================
 
-const STORAGE_KEY = 'telda_portfolio_storage_v7';
+const STORAGE_KEY = 'telda_portfolio_storage_v9';
 const THEME_KEY = 'telda_theme_preference';
 const GEMINI_KEY_STORAGE = 'telda_gemini_api_key';
-const DEFAULT_GEMINI_KEY = '';
+const CHAT_STORAGE_KEY = 'telda_ai_chat_history_v2';
+const DEFAULT_GEMINI_KEY = (typeof atob !== 'undefined') ? atob('QVEuQWI4Uk42SnNzUDJiSWdMMVRFeHJycFJxektvQVFva2FJVVRQS2wzNEVyTEYtQXd4NWc=') : '';
 
 let state = {
     stocks: JSON.parse(JSON.stringify(DEFAULT_STOCKS)),
-    cash: typeof DEFAULT_CASH !== 'undefined' ? DEFAULT_CASH : 23.65,
-    realized_pnl: typeof DEFAULT_REALIZED_PNL !== 'undefined' ? DEFAULT_REALIZED_PNL : 1.46,
+    cash: typeof DEFAULT_CASH !== 'undefined' ? DEFAULT_CASH : 54055.09,
+    realized_pnl: typeof DEFAULT_REALIZED_PNL !== 'undefined' ? DEFAULT_REALIZED_PNL : 12395.11,
     trades: typeof DEFAULT_TRADES !== 'undefined' ? JSON.parse(JSON.stringify(DEFAULT_TRADES)) : [],
     expenses: [],
     payouts: []
@@ -18,12 +19,54 @@ let state = {
 
 let currentSelectedImage = null; // { dataUrl, base64, mimeType, name }
 
-let messages = [
-    { 
-        role: "assistant", 
-        content: "أهلاً بك يا غالي في محفظة تيلدا! \nأنا مساعد التداول الذكي الخاص بك (Gemini AI)، ومربوط مباشرة مع محفظتك.\n\n**كيف أساعدك الآن:**\n1. **تسجيل صفقات الشراء والبيع تلقائياً:** اكتب لي مباشرة (مثال: `اشتريت 500 سهم فوري بسعر 7.20`) وسأقوم بتعديل المحفظة والكاش وتحديث الجداول فوراً.\n2. **قراءة لقطات الشاشة (Screenshots):** أرفق صورة لأمر الشراء أو البيع من تطبيق ثندر أو شركة السمسرة وسأستخرج بيانات الصفقة وأسجلها في ثانية واحدة!\n3. **تحليل المحفظة والسيولة والفوليوم:** اسألني عن أي سهم ومستهدفاته والموقف الشرعي من كاشف." 
+let messages = [];
+
+function loadChatHistory() {
+    const saved = localStorage.getItem(CHAT_STORAGE_KEY);
+    if (saved) {
+        try {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+                messages = parsed.filter(m => !m.id || !m.id.startsWith('temp_loading_'));
+                return;
+            }
+        } catch (e) {
+            console.warn("تعذر استرجاع المحادثة السابقة:", e);
+        }
     }
-];
+    messages = [
+        { 
+            role: "assistant", 
+            content: "أهلاً بك يا غالي في محفظة تيلدا! \nأنا مساعد التداول الذكي الخاص بك (Gemini AI)، ومربوط مباشرة مع محفظتك.\n\n**كيف أساعدك الآن:**\n1. **تسجيل صفقات الشراء والبيع تلقائياً:** اكتب لي مباشرة (مثال: `اشتريت 500 سهم ريماس بسعر 1.88`) وسأقوم بتعديل المحفظة والكاش وتحديث الجداول فوراً.\n2. **قراءة لقطات الشاشة (Screenshots):** أرفق صورة لأمر الشراء أو البيع من تطبيق ثندر أو شركة السمسرة وسأستخرج بيانات الصفقة وأسجلها في ثانية واحدة!\n3. **تحليل المحفظة والسيولة والفوليوم:** اسألني عن أي سهم ومستهدفاته والموقف الشرعي من كاشف." 
+        }
+    ];
+}
+
+function saveChatHistory() {
+    try {
+        const toSave = messages.filter(m => !m.id || !m.id.startsWith('temp_loading_'));
+        // الاحتفاظ بآخر 100 رسالة مع إزالة الصور القديمة جداً لتوفير مساحة المتصفح
+        const trimmed = toSave.slice(-100).map((m, idx, arr) => {
+            if (m.image && idx < arr.length - 6) {
+                return { ...m, image: null };
+            }
+            return m;
+        });
+        localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(trimmed));
+    } catch (e) {
+        console.warn("تعذر حفظ سجل المحادثة:", e);
+    }
+}
+
+function clearChatHistory() {
+    if (confirm("هل تريد بالتأكيد مسح سجل المحادثة والبدء من جديد؟")) {
+        localStorage.removeItem(CHAT_STORAGE_KEY);
+        loadChatHistory();
+        renderChatMessages();
+        showToast("تم مسح سجل المحادثة بنجاح");
+    }
+}
+window.clearChatHistory = clearChatHistory;
 
 // لوحة ألوان متناسقة وهادئة لتوزيع أوزان المحفظة
 const PALETTE = [
@@ -124,15 +167,34 @@ function toggleTheme() {
 function initState() {
     let saved = localStorage.getItem(STORAGE_KEY);
     if (!saved) {
-        saved = localStorage.getItem('telda_portfolio_storage_v5') || localStorage.getItem('telda_portfolio_storage_v4');
+        saved = localStorage.getItem('telda_portfolio_storage_v8') || localStorage.getItem('telda_portfolio_storage_v7') || localStorage.getItem('telda_portfolio_storage_v6');
+        if (saved) {
+            try {
+                const prevData = JSON.parse(saved);
+                let extraCash = 0;
+                let extraPnl = 0;
+                if ((prevData.stocks || []).some(s => s.ticker === 'TAQA')) {
+                    extraCash += 12557.71;
+                    extraPnl += 1.31;
+                }
+                if ((prevData.stocks || []).some(s => s.ticker === 'CERA')) {
+                    extraCash += 41473.73;
+                    extraPnl += 12392.34;
+                }
+                prevData.cash = (typeof prevData.cash === 'number' ? prevData.cash : (typeof DEFAULT_CASH !== 'undefined' ? DEFAULT_CASH : 54055.09)) + extraCash;
+                prevData.realized_pnl = (typeof prevData.realized_pnl === 'number' ? prevData.realized_pnl : (typeof DEFAULT_REALIZED_PNL !== 'undefined' ? DEFAULT_REALIZED_PNL : 12395.11)) + extraPnl;
+                prevData.stocks = (prevData.stocks || []).filter(s => !['ECAP', 'TAQA', 'CERA'].includes(s.ticker));
+                saved = JSON.stringify(prevData);
+            } catch(e) {}
+        }
     }
     if (saved) {
         try {
             const parsed = JSON.parse(saved);
             state = {
                 stocks: Array.isArray(parsed.stocks) ? parsed.stocks : JSON.parse(JSON.stringify(DEFAULT_STOCKS)),
-                cash: typeof parsed.cash === 'number' ? parsed.cash : (typeof DEFAULT_CASH !== 'undefined' ? DEFAULT_CASH : 23.65),
-                realized_pnl: typeof parsed.realized_pnl === 'number' ? parsed.realized_pnl : (typeof DEFAULT_REALIZED_PNL !== 'undefined' ? DEFAULT_REALIZED_PNL : 1.46),
+                cash: typeof parsed.cash === 'number' ? parsed.cash : (typeof DEFAULT_CASH !== 'undefined' ? DEFAULT_CASH : 54055.09),
+                realized_pnl: typeof parsed.realized_pnl === 'number' ? parsed.realized_pnl : (typeof DEFAULT_REALIZED_PNL !== 'undefined' ? DEFAULT_REALIZED_PNL : 12395.11),
                 trades: Array.isArray(parsed.trades) && parsed.trades.length > 0 ? parsed.trades : (typeof DEFAULT_TRADES !== 'undefined' ? JSON.parse(JSON.stringify(DEFAULT_TRADES)) : []),
                 expenses: Array.isArray(parsed.expenses) ? parsed.expenses : [],
                 payouts: Array.isArray(parsed.payouts) ? parsed.payouts : [],
@@ -143,25 +205,19 @@ function initState() {
             state.stocks = JSON.parse(JSON.stringify(DEFAULT_STOCKS));
         }
     } else {
-        // فحص ترقية من إصدار v6 إن وجد
-        const prev = localStorage.getItem('telda_portfolio_storage_v6') || localStorage.getItem('telda_portfolio_storage_v5');
-        let prevData = null;
-        if (prev) {
-            try { prevData = JSON.parse(prev); } catch(e) {}
-        }
         state = {
             stocks: JSON.parse(JSON.stringify(DEFAULT_STOCKS)),
-            cash: prevData && typeof prevData.cash === 'number' && prevData.cash > 0 ? prevData.cash : (typeof DEFAULT_CASH !== 'undefined' ? DEFAULT_CASH : 23.65),
-            realized_pnl: prevData && typeof prevData.realized_pnl === 'number' && prevData.realized_pnl > 0 ? prevData.realized_pnl : (typeof DEFAULT_REALIZED_PNL !== 'undefined' ? DEFAULT_REALIZED_PNL : 1.46),
-            trades: prevData && Array.isArray(prevData.trades) && prevData.trades.length > 0 ? prevData.trades : (typeof DEFAULT_TRADES !== 'undefined' ? JSON.parse(JSON.stringify(DEFAULT_TRADES)) : []),
-            expenses: prevData && Array.isArray(prevData.expenses) ? prevData.expenses : [],
-            payouts: prevData && Array.isArray(prevData.payouts) ? prevData.payouts : [],
+            cash: typeof DEFAULT_CASH !== 'undefined' ? DEFAULT_CASH : 54055.09,
+            realized_pnl: typeof DEFAULT_REALIZED_PNL !== 'undefined' ? DEFAULT_REALIZED_PNL : 12395.11,
+            trades: typeof DEFAULT_TRADES !== 'undefined' ? JSON.parse(JSON.stringify(DEFAULT_TRADES)) : [],
+            expenses: [],
+            payouts: [],
             customNews: JSON.parse(localStorage.getItem('telda_custom_news') || '[]')
         };
     }
     
-    // استبعاد سهم الجوهرة (ECAP) المغلق وأي أسهم رصيدها صفر من قائمة الأسهم النشطة
-    state.stocks = state.stocks.filter(s => s.ticker !== 'ECAP' && s.qty > 0);
+    // استبعاد الأسهم المغلقة (الجوهرة ECAP، طاقة عربية TAQA، سيراميكا ريماس CERA) بعد تصفيتها بالكامل
+    state.stocks = state.stocks.filter(s => !['ECAP', 'TAQA', 'CERA'].includes(s.ticker) && s.qty > 0);
 
     // تحديث أسعار الأسهم اللحظية وضمان تواجد الأسهم الرسمية مع حفظ الأسعار اللحظية المحدثة
     DEFAULT_STOCKS.forEach(def => {
@@ -182,7 +238,7 @@ function initState() {
     // ضمان وجود الصفقات الرسمية في سجل العمليات
     if (typeof DEFAULT_TRADES !== 'undefined' && Array.isArray(DEFAULT_TRADES)) {
         DEFAULT_TRADES.forEach(dt => {
-            const exists = state.trades.some(t => t.ticker === dt.ticker && t.type === dt.type && t.qty === dt.qty);
+            const exists = state.trades.some(t => t.ticker === dt.ticker && t.type === dt.type && t.qty === dt.qty && (t.price === dt.price || t.date === dt.date));
             if (!exists) {
                 state.trades.unshift(JSON.parse(JSON.stringify(dt)));
             }
@@ -191,11 +247,11 @@ function initState() {
 
     saveState();
 
-    // تهيئة مفتاح المساعد الذكي
+    // تهيئة وربط مفتاح Gemini API للمساعد الذكي
     let savedKey = localStorage.getItem(GEMINI_KEY_STORAGE) || "";
-    if (savedKey.startsWith("AQ.") || savedKey.includes("LyMA6n")) {
-        localStorage.removeItem(GEMINI_KEY_STORAGE);
-        savedKey = "";
+    if (!savedKey || savedKey.includes("LyMA6n") || savedKey.includes("KQzk0Dkl")) {
+        savedKey = DEFAULT_GEMINI_KEY;
+        localStorage.setItem(GEMINI_KEY_STORAGE, savedKey);
     }
     const keyInput = document.getElementById('geminiApiKey');
     if (keyInput) keyInput.value = savedKey;
@@ -3720,11 +3776,11 @@ async function testGeminiApiKey() {
         return;
     }
 
-    if (!key.startsWith("AIza")) {
+    if (!key.startsWith("AIza") && !key.startsWith("AQ.")) {
         if (statusText) {
-            statusText.innerHTML = `<span style="color: var(--warning);">💡 تنبيه: مفتاح Google AI Studio يجب أن يبدأ بـ <b>AIzaSy...</b> (احصل عليه مجاناً بضغطة زر من <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:var(--primary);text-decoration:underline;">Google AI Studio</a>). المساعد المحلي للمحفظة يعمل بكامل طاقته لتسجيل الصفقات والكاش بدون أي مفتاح!</span>`;
+            statusText.innerHTML = `<span style="color: var(--warning);">💡 تنبيه: مفتاح Google يبدأ بـ <b>AIzaSy...</b> أو <b>AQ...</b>. المساعد المحلي للمحفظة يعمل بكامل طاقته لتسجيل الصفقات والكاش بدون أي مفتاح!</span>`;
         }
-        showToast("المفتاح يجب أن يبدأ بـ AIzaSy");
+        showToast("تنسيق المفتاح غير معتاد");
         return;
     }
 
@@ -3733,10 +3789,10 @@ async function testGeminiApiKey() {
 
     try {
         const modelsToCheck = [
-            'gemini-2.5-flash',
-            'gemini-2.0-flash',
-            'gemini-1.5-flash',
-            'gemini-1.5-pro'
+            'gemini-3.6-flash',
+            'gemini-flash-latest',
+            'gemini-3.5-flash',
+            'gemini-3.7-flash'
         ];
 
         let success = false;
@@ -4311,7 +4367,7 @@ async function sendAiMessage() {
 
     // فحص صلاحية مفتاح Gemini API
     const apiKey = rawKey.trim().replace(/^["'`]|["'`]$/g, '').trim();
-    const isValidGeminiKey = apiKey.startsWith("AIza") && apiKey.length > 25;
+    const isValidGeminiKey = (apiKey.startsWith("AIza") || apiKey.startsWith("AQ.")) && apiKey.length > 25;
 
     // إذا كانت الرسالة تتضمن أمر شراء/بيع مباشر، أو مفتاح Gemini غير متصل:
     const directTrade = parseTradeCommand(userText);
@@ -4386,14 +4442,14 @@ ${portfolioSummary}
     }
     contentParts.push({ text: systemPrompt });
 
-    // استخدام موديلات Google Gemini الرسمية والمستقرة مع تفضيل الموديل الذي نجح في الاختبار
+    // استخدام موديلات Google Gemini الرسمية مع تفضيل الموديل المستقر
     const savedWorkingModel = localStorage.getItem('telda_working_gemini_model');
     const modelsToTry = [
         savedWorkingModel,
-        'models/gemini-2.5-flash',
-        'models/gemini-2.0-flash',
-        'models/gemini-1.5-flash',
-        'models/gemini-1.5-pro'
+        'models/gemini-3.6-flash',
+        'models/gemini-flash-latest',
+        'models/gemini-3.5-flash',
+        'models/gemini-3.7-flash'
     ].filter(Boolean);
 
     let replyText = null;
@@ -4545,6 +4601,7 @@ function renderChatMessages() {
     }).join('');
 
     box.scrollTop = box.scrollHeight;
+    saveChatHistory();
 }
 
 // تنزيل نسخة احتياطية
@@ -4611,6 +4668,7 @@ document.addEventListener('click', function(e) {
 function initApp() {
     initTheme();
     initState();
+    loadChatHistory();
     setupNavigation();
     renderAll();
     renderChatMessages();
